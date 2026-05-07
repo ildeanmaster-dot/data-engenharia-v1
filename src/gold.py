@@ -244,3 +244,68 @@ def gold_alinhamento_frente_vs_partido(silver):
     )
 
     return resumo_frente, resumo_partido
+
+
+# ----------------------------------------------------------------------
+# Entregavel 4 - Raio-X CEAP
+# ----------------------------------------------------------------------
+
+def gold_ceap_top_por_categoria(silver, top_n=10):
+    """Top N gastos por (tipo_despesa).
+
+    Versao simples: nao calcula z-score, so pega os maiores valores
+    individuais por categoria. Util pra varredura visual.
+    """
+    df = silver["deputado_despesas"].copy()
+    if df.empty:
+        return pd.DataFrame()
+
+    # enriquece com nome do deputado
+    dep = silver["deputados"][["id_deputado", "nome", "sigla_partido", "sigla_uf"]]
+    df = df.merge(dep, on="id_deputado", how="left")
+
+    # ranking por categoria
+    df["rank"] = df.groupby("tipo_despesa")["valor_liquido"].rank(method="first", ascending=False)
+    out = df[df["rank"] <= top_n].copy()
+    return out[[
+        "tipo_despesa", "rank", "id_deputado", "nome", "sigla_partido", "sigla_uf",
+        "valor_liquido", "nome_fornecedor", "cnpj_fornecedor", "data_documento",
+    ]].sort_values(["tipo_despesa", "rank"]).reset_index(drop=True)
+
+
+def gold_ceap_ranking_fornecedor(silver):
+    """Top fornecedores por valor total recebido."""
+    df = silver["deputado_despesas"].copy()
+    if df.empty:
+        return pd.DataFrame()
+
+    out = (
+        df.groupby(["cnpj_fornecedor", "nome_fornecedor"], dropna=False)
+        .agg(
+            valor_total=("valor_liquido", "sum"),
+            qtd_documentos=("cod_documento", "count"),
+            qtd_deputados=("id_deputado", "nunique"),
+        )
+        .reset_index()
+        .sort_values("valor_total", ascending=False)
+    )
+    return out.head(100).reset_index(drop=True)
+
+
+def gold_ceap_mensal_partido(silver):
+    """Total gasto por partido, por mes (relatorio mensal)."""
+    df = silver["deputado_despesas"].copy()
+    if df.empty:
+        return pd.DataFrame()
+    dep = silver["deputados"][["id_deputado", "sigla_partido"]]
+    df = df.merge(dep, on="id_deputado", how="left")
+    out = (
+        df.groupby(["ano", "mes", "sigla_partido"])
+        .agg(
+            total=("valor_liquido", "sum"),
+            qtd=("cod_documento", "count"),
+        )
+        .reset_index()
+        .sort_values(["ano", "mes", "total"], ascending=[True, True, False])
+    )
+    return out
