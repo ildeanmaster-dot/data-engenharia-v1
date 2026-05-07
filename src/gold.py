@@ -122,3 +122,56 @@ def gold_deputados_em_n_frentes(atlas, top=20):
              .head(top)
              .reset_index(drop=True)
     )
+
+
+# ----------------------------------------------------------------------
+# Entregavel 2 - Calendario de eventos
+# ----------------------------------------------------------------------
+
+def gold_taxa_presenca(silver):
+    """Taxa de presenca por deputado: presencas / total de eventos."""
+    eventos = silver["eventos"]["id_evento"]
+    total_eventos = eventos.nunique()
+    if total_eventos == 0:
+        return pd.DataFrame()
+
+    presencas = (
+        silver["evento_deputados"]
+        .groupby("id_deputado")
+        .size()
+        .reset_index(name="n_presencas")
+    )
+    presencas["total_eventos"] = total_eventos
+    presencas["taxa_presenca"] = presencas["n_presencas"] / total_eventos
+
+    # adiciona nome
+    dep = silver["deputados"][["id_deputado", "nome", "sigla_partido", "sigla_uf"]]
+    return presencas.merge(dep, on="id_deputado", how="left").sort_values(
+        "taxa_presenca", ascending=False
+    ).reset_index(drop=True)
+
+
+def gold_densidade_semanal(silver):
+    """Quantos eventos por semana (ano-semana ISO)."""
+    df = silver["eventos"].copy()
+    df["data_hora_inicio"] = pd.to_datetime(df["data_hora_inicio"], errors="coerce", utc=True)
+    df = df.dropna(subset=["data_hora_inicio"])
+    df["ano"] = df["data_hora_inicio"].dt.isocalendar().year
+    df["semana"] = df["data_hora_inicio"].dt.isocalendar().week
+    out = (
+        df.groupby(["ano", "semana"])
+          .size()
+          .reset_index(name="qtd_eventos")
+          .sort_values(["ano", "semana"])
+          .reset_index(drop=True)
+    )
+    return out
+
+
+def gold_eventos_futuros(silver):
+    """View de eventos com data futura (calendario publico)."""
+    df = silver["eventos"].copy()
+    df["data_hora_inicio"] = pd.to_datetime(df["data_hora_inicio"], errors="coerce", utc=True)
+    now = pd.Timestamp.utcnow()
+    futuros = df[df["data_hora_inicio"] > now].copy()
+    return futuros.sort_values("data_hora_inicio").reset_index(drop=True)
