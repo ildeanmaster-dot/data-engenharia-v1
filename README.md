@@ -77,4 +77,13 @@ Importar via Repos (Git folder) e rodar em ordem.
 - **Sem catálogo YAML** — endpoints como dict Python é mais direto pra esse volume
 - **PySpark só no Databricks** — local roda em pandas, é mais rápido pra iterar
 
+## Sobre ingestão fora do cluster
+
+Em arquiteturas reais a coleta da API roda separada do cluster Databricks
+(Lambda/Airflow/Cron entrega no object storage; cluster consome dali).
+Vantagens: cluster fica focado em processamento pesado, ingestão não paga
+compute parado, segurança fica granular. O `scripts/live_demo.py` reproduz
+esse fluxo numa demo: bate na API local, sobe pro Volume, dispara
+notebooks no Databricks.
+
 Feito com auxílio de IA (Claude). Decisões e revisões são minhas.
