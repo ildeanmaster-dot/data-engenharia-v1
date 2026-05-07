@@ -175,3 +175,72 @@ def gold_eventos_futuros(silver):
     now = pd.Timestamp.utcnow()
     futuros = df[df["data_hora_inicio"] > now].copy()
     return futuros.sort_values("data_hora_inicio").reset_index(drop=True)
+
+
+# ----------------------------------------------------------------------
+# Entregavel 3 - Correlacao frente x votacao
+# ----------------------------------------------------------------------
+
+def _alinhamento_por_grupo(votos, group_col):
+    """Pra cada votacao+grupo, calcula % do voto majoritario.
+
+    Se 80% dos membros votaram SIM, alinhamento=0.8. So conta votos validos
+    (Sim/Nao - ignora abstencao/obstrucao por enquanto).
+    """
+    df = votos[votos["tipo_voto"].isin(["Sim", "Nao"])].copy()
+    if df.empty:
+        return pd.DataFrame()
+
+    grupo = df.groupby(["id_votacao", group_col, "tipo_voto"]).size().reset_index(name="n")
+    pivot = grupo.pivot_table(
+        index=["id_votacao", group_col],
+        columns="tipo_voto", values="n", fill_value=0
+    ).reset_index()
+
+    # garante colunas Sim/Nao
+    for c in ["Sim", "Nao"]:
+        if c not in pivot.columns:
+            pivot[c] = 0
+
+    pivot["total"] = pivot["Sim"] + pivot["Nao"]
+    # so faz sentido se tiver >= 2 votantes
+    pivot = pivot[pivot["total"] >= 2].copy()
+    pivot["alinhamento"] = pivot[["Sim", "Nao"]].max(axis=1) / pivot["total"]
+
+    return pivot[[c for c in ["id_votacao", group_col, "Sim", "Nao", "total", "alinhamento"] if c in pivot.columns]]
+
+
+def gold_alinhamento_frente_vs_partido(silver):
+    """Compara alinhamento medio dentro de frentes vs dentro de partidos.
+
+    Retorna duas tabelas: por frente e por partido. A ideia e ver se deputados
+    que estao na mesma frente votam "mais juntos" do que os do mesmo partido.
+    """
+    votos = silver["votacao_votos"].copy()
+
+    # alinhamento por partido
+    ali_partido = _alinhamento_por_grupo(votos, "sigla_partido")
+    resumo_partido = (
+        ali_partido.groupby("sigla_partido")
+        .agg(alinhamento_medio=("alinhamento", "mean"),
+             qtd_votacoes=("id_votacao", "nunique"))
+        .reset_index()
+        .sort_values("alinhamento_medio", ascending=False)
+    )
+
+    # alinhamento por frente: precisa explodir voto por frente do deputado
+    fm = silver["frente_membros"][["id_frente", "id_deputado"]]
+    votos_frente = votos.merge(fm, on="id_deputado")
+    ali_frente = _alinhamento_por_grupo(votos_frente, "id_frente")
+
+    fr = silver["frentes"][["id_frente", "nome_frente"]]
+    resumo_frente = (
+        ali_frente.groupby("id_frente")
+        .agg(alinhamento_medio=("alinhamento", "mean"),
+             qtd_votacoes=("id_votacao", "nunique"))
+        .reset_index()
+        .merge(fr, on="id_frente", how="left")
+        .sort_values("alinhamento_medio", ascending=False)
+    )
+
+    return resumo_frente, resumo_partido
