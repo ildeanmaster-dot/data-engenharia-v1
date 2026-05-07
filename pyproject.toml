@@ -1,0 +1,9 @@
+[project]
+name = "ftk-camara"
+version = "0.1.0"
+description = "Pipeline da Camara dos Deputados - Upskill Tiller T2"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

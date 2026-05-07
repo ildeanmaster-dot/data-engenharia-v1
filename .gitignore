@@ -1,0 +1,27 @@
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# data
+data/samples/*.jsonl
+data/bronze/
+data/silver/
+data/gold/
+lakehouse/
+
+# env
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
