@@ -32,7 +32,19 @@ pip install -r requirements.txt
 python -m src.runner
 ```
 
-A primeira execução vai baixar amostras da API e gerar parquets em `data/`.
+A primeira execução vai baixar amostras da API e gerar parquets em `data/gold/`.
+
+Se ja tem os JSONL coletados (em `data/samples/`), pode pular a coleta:
+
+```bash
+python -m src.runner --skip-bronze
+```
+
+### Rodar os tests
+
+```bash
+python -m pytest tests/ -v
+```
 
 ## No Databricks
 
