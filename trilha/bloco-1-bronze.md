@@ -42,6 +42,18 @@ A fonte: **API REST dos Dados Abertos da Câmara** — `https://dadosabertos.cam
 - 🟡 **Pleno:** esses campos são a base da **linhagem**. Com eles eu reproduzo a coleta, depuro um registro estranho e sei a "validade" do dado.
 - 🔴 **Sênior:** auditoria na Bronze + **Time Travel** do Delta = rastreabilidade ponta a ponta exigida em ambientes regulados. Você consegue responder "qual era o estado deste dado no dia X e de onde ele veio?".
 
+### 2.6 Votação simbólica vs nominal (lição de campo) 🗳️
+Descoberto na prática quando `votacao_votos` veio com **0 registros**.
+- 🟢 **Júnior:** nem todo endpoint que existe retorna dados. `/votacoes/{id}/votos` só tem conteúdo quando a votação é **nominal** (voto registrado deputado a deputado). A maioria é **simbólica** ("aprovado por acordo") e devolve lista vazia.
+- 🟡 **Pleno:** votações nominais acontecem sobretudo no **Plenário** (`idOrgao=180`). Coletar votações de comissão e esperar votos individuais é coletar o **pai errado**. A correção foi filtrar a fonte: `idOrgao=180` + só votações com placar (`"...Total: N"` na descrição).
+- 🔴 **Sênior:** usar o texto da descrição como filtro é uma **heurística barata** (evita centenas de chamadas a `/votos` que voltariam vazias), mas **frágil** — depende do texto não mudar. A alternativa robusta é chamar `/votos` e guardar só o não-vazio, ao custo de mais requisições. Escolher entre as duas é um trade-off **custo × robustez** que se documenta no registro de decisões. Saber *que existe* essa diferença é o que separa quem leu o dado de quem só copiou o código.
+
+### 2.7 Observabilidade — enxergar o pipeline rodando 👀
+Quando o fan-out de despesas parecia "travado" por minutos.
+- 🟢 **Júnior:** imprima progresso (`print` por item) para saber que o processo está vivo.
+- 🟡 **Pleno:** monitore sem tocar no código abrindo um 2º terminal e contando as linhas dos JSONL crescendo; e use `flush=True`/`python -u` para a saída aparecer em tempo real.
+- 🔴 **Sênior:** em produção isso vira **logging estruturado** + métricas (volume, latência, taxa de erro por execução) num dashboard, com alertas. Observabilidade é requisito do desafio ("documentar triggers, dependências, recuperação") — não um luxo.
+
 ---
 
 ## 3. Mão na massa — reconstruindo a Bronze
@@ -70,13 +82,25 @@ ENDPOINTS = {
     "deputados": {"path": "/deputados", "params": {"itens": 100, "ordem": "ASC", "ordenarPor": "nome"}, "paginated": True},
     "frentes":   {"path": "/frentes",   "params": {"idLegislatura": 57, "itens": 100}, "paginated": True},
     # fan-out: depende do id do pai
-    "deputado_despesas": {"path": "/deputados/{id}/despesas", "params": {"itens": 100, "ano": 2024},
+    "deputado_despesas": {"path": "/deputados/{id}/despesas", "params": {"itens": 100, "ano": ANO_CEAP},
                           "paginated": True, "fanout_from": "deputados"},
 }
 FANOUT_LIMITS = {"deputado_despesas": 20}   # trava para não explodir a coleta
 SAMPLES_DIR = "data/samples"
 ```
-**Por quê:** configuração como dado (não código espalhado) deixa a coleta declarativa e fácil de estender. Trocar um limite não exige mexer na lógica.
+
+> ⚠️ **Sobre o `ano` das despesas (CEAP).** O endpoint `/deputados/{id}/despesas` filtra os gastos por **ano** — é um parâmetro da própria API. No código original esse valor estava **fixo em `2024`** (*hardcoded*), por dois motivos: era o ano de referência quando o projeto foi escrito e fixar um ano **limita o volume** da coleta (sem filtro, viriam despesas de vários anos e o fan-out explodiria).
+>
+> O problema é que valor fixo no código envelhece: estamos em **2026**, e a 57ª legislatura vai de 2023 a 2027, então 2024/2025/2026 são todos válidos. Boa prática é **não cravar** — deixe configurável e escolha o(s) ano(s) que vai analisar. Por isso, em vez de `"ano": 2024`, defina no topo do arquivo:
+>
+> ```python
+> from datetime import datetime
+> ANO_CEAP = datetime.now().year   # ano corrente; ou troque por um ano fixo p/ análise (ex.: 2025)
+> ```
+>
+> 🟡 **Nível pleno:** ano dinâmico evita que o pipeline "pare no tempo". 🔴 **Nível sênior:** em produção você nem fixaria um ano — faria **carga incremental** puxando só o delta desde a última coleta (assunto do Bloco 6). Fixar o ano aqui é uma simplificação consciente para o volume do desafio, e isso é o tipo de decisão que se **documenta** (vai pro registro de decisões técnicas).
+
+**Por quê:** configuração como dado (não código espalhado) deixa a coleta declarativa e fácil de estender. Trocar um limite — ou o ano da CEAP — não exige mexer na lógica.
 
 ### Passo 2 — O cliente HTTP defensivo (`src/api.py`)
 Uma função só para *buscar*, com retry nos erros certos:
@@ -113,6 +137,18 @@ def iter_pages(path, params=None, max_pages=None):
         time.sleep(0.25)   # rate limit básico
 ```
 **Por quê:** `yield` (gerador) processa página a página sem segurar tudo na memória. Parar no `Link` ausente é mais robusto que adivinhar o total.
+
+> 🔄 **Revisão (após explorar a API real):** confirmamos que a paginação vem **no corpo** da resposta, no array `links` com `rel="next"` — e está sempre presente. É mais confiável que o header `Link` (que proxies/caches podem remover). Versão recomendada do laço, lendo do corpo:
+> ```python
+> body = r.json()
+> records = body.get("dados", [])
+> yield records, page, r.url
+> has_next = any(l.get("rel") == "next" for l in body.get("links", []))
+> if not has_next:
+>     break
+> page += 1
+> ```
+> Com isso, `parse_next_page` e os imports `urlparse/parse_qs` ficam dispensáveis. 💡 Bônus confirmado: na CEAP, os campos `ano` e `mes` já vêm prontos na resposta — para agregação mensal você **não precisa** derivar do `data_documento`.
 
 ### Passo 4 — Gravar a Bronze com auditoria (`src/bronze.py`)
 ```python
@@ -184,11 +220,16 @@ O notebook `01_ingest_bronze.py` lê esses JSONL do **Volume UC** e materializa 
    ❌ **Errado.** Você registra o erro daquele item e segue; resiliência exige isolar a falha.
 5. *"Backoff exponencial existe para não sobrecarregar a fonte que já está em apuros."*
    ✅ **Certo.** Espera crescente dá tempo de o servidor se recuperar e evita novos 429.
+6. *"Se o endpoint `/votacoes/{id}/votos` retorna lista vazia, é porque o pipeline tem um bug."*
+   ❌ **Errado.** Pode ser uma votação **simbólica**, que não registra voto individual. O "vazio" é o dado correto; o ajuste é coletar votações **nominais** (Plenário).
 
 ## 🎤 Perguntas de entrevista (com resposta-modelo)
 
 **🟢 Júnior — "Como você pagina uma API que devolve 100 itens por vez?"**
-> Faço uma requisição inicial e, enquanto houver próxima página, continuo. Na API da Câmara eu sigo o header `Link` com `rel="next"`, que me diz a URL da próxima página, e paro quando ele não aparece mais. Isso evita eu ter que adivinhar quantas páginas existem.
+> Faço uma requisição inicial e, enquanto houver próxima página, continuo. Na API da Câmara cada resposta traz um array `links`; enquanto existir um `rel="next"`, eu sigo para a próxima e paro quando ele some. Assim não preciso adivinhar quantas páginas existem. (O header HTTP `Link` traz a mesma informação, mas o `links` do corpo é mais confiável.)
+
+**🟡 Pleno — "Você chamou um endpoint e veio vazio, mas você tinha certeza de que havia dados. Como investiga?"**
+> Primeiro confirmo na fonte: chamo a URL exata (que tenho gravada em `source_url`) no navegador/curl e vejo a resposta crua. Se a API realmente devolve vazio, o "bug" não é meu — é a semântica do dado. Foi o que aconteceu com os votos: o endpoint só retorna voto individual em votação **nominal**; as simbólicas vêm vazias. A correção foi coletar o pai certo (votações do Plenário com placar registrado), não mexer no coletor.
 
 **🟡 Pleno — "Por que separar o cliente HTTP da lógica de coleta?"**
 > Porque são responsabilidades diferentes. O cliente sabe *como* buscar (retry, timeout, status), e deve ser genérico e testável. A coleta sabe *o que* buscar e como salvar. Separados, eu testo o retry com mocks sem bater na rede, reuso o cliente em todos os endpoints, e mudo a regra de coleta sem tocar na de rede.
