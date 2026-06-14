@@ -8,8 +8,13 @@ Uso:
 import argparse
 import logging
 import time
+from pathlib import Path
 
 from src.bronze import collect_all
+from src.silver import to_silver_all
+from src.gold import build_all
+
+GOLD_DIR = "data/gold"
 
 
 def _parse_args():
@@ -21,6 +26,14 @@ def _parse_args():
     return p.parse_args()
 
 
+def save_tables(tables, out_dir=GOLD_DIR):
+    """Materializa cada DataFrame Gold como Parquet (equivalente local ao Delta)."""
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    for name, df in tables.items():
+        df.to_parquet(Path(out_dir) / f"{name}.parquet", index=False)
+    return len(tables)
+
+
 def main():
     logging.basicConfig(
         level=logging.INFO,
@@ -28,18 +41,26 @@ def main():
     )
     args = _parse_args()
 
+    # --- BRONZE ---
     if args.skip_bronze:
         print("== Bronze: pulada (--skip-bronze) ==")
     else:
         print("== Bronze: coletando da API ==")
         t0 = time.time()
         results = collect_all(max_pages_simple=args.max_pages)
-        total = sum(results.values())
-        print(f"== Bronze concluída: {total} registros em {time.time() - t0:.1f}s ==")
+        print(f"== Bronze concluída: {sum(results.values())} registros em {time.time() - t0:.1f}s ==")
 
-    # Blocos 2–4 vão plugar aqui:
-    #   from src.silver import to_silver_all
-    #   from src.gold import build_all
+    # --- SILVER ---
+    print("== Silver: limpando e tipando ==")
+    silver = to_silver_all()
+    print(f"== Silver: {len(silver)} entidades ==")
+
+    # --- GOLD ---
+    print("== Gold: montando star schema + entregáveis ==")
+    gold = build_all(silver)
+    n = save_tables(gold)
+    print(f"== Gold: {n} tabelas materializadas em {GOLD_DIR}/ ==")
+
     print("Pipeline finalizado.")
 
 
